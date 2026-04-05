@@ -1,0 +1,543 @@
+-- Project Delta Cheat v1.3
+-- Otimizado para Xeno
+-- Compatível com atualização mais recente
+
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local Workspace = game:GetService("Workspace")
+local UserInputService = game:GetService("UserInputService")
+local TweenService = game:GetService("TweenService")
+
+-- Configurações
+local Settings = {
+    Aimbot = {
+        Enabled = true,
+        Key = "q", -- Tecla de ativação
+        Smoothness = 0.15,
+        FOV = 150, -- Campo de visão
+        TeamCheck = true,
+        VisibleCheck = true,
+        Prediction = 0.15 -- Previsão de movimento
+    },
+    ESP = {
+        Enabled = true,
+        Box = true,
+        Name = true,
+        Distance = true,
+        Health = true,
+        Items = true, -- ESP para itens
+        Boxes = true, -- ESP para caixas
+        Tracers = true
+    },
+    Speed = {
+        Enabled = false,
+        Value = 25 -- Valor padrão da velocidade
+    },
+    Visuals = {
+        FOV = 120, -- Aumento do campo de visão
+        Brightness = 2
+    }
+}
+
+-- Variáveis globais
+local LocalPlayer = Players.LocalPlayer
+local Camera = Workspace.CurrentCamera
+local Mouse = LocalPlayer:GetMouse()
+local Connections = {}
+local ESPObjects = {}
+local ItemCache = {}
+
+-- Função de utilitário para calcular distância
+function CalculateDistance(Position)
+    return (LocalPlayer.Character.HumanoidRootPart.Position - Position).Magnitude
+end
+
+-- Função para verificar visibilidade (raycast)
+function IsVisible(Target)
+    if not Target then return false end
+    local Origin = Camera.CFrame.Position
+    local Direction = (Target.Position - Origin).Unit * 1000
+    
+    local RaycastParams = RaycastParams.new()
+    RaycastParams.FilterType = Enum.RaycastFilterType.Blacklist
+    RaycastParams.FilterDescendantsInstances = {LocalPlayer.Character}
+    
+    local Result = Workspace:Raycast(Origin, Direction, RaycastParams)
+    
+    if Result and Result.Instance:IsDescendantOf(Target.Parent) then
+        return true
+    end
+    return false
+end
+
+-- Sistema ESP para jogadores
+function CreateESP(Player)
+    if Player == LocalPlayer then return end
+    
+    local Box = Drawing.new("Square")
+    Box.Visible = false
+    Box.Color = Color3.fromRGB(255, 0, 0)
+    Box.Thickness = 2
+    Box.Filled = false
+    
+    local Name = Drawing.new("Text")
+    Name.Visible = false
+    Name.Color = Color3.fromRGB(255, 255, 255)
+    Name.Size = 14
+    Name.Center = true
+    
+    local DistanceText = Drawing.new("Text")
+    DistanceText.Visible = false
+    DistanceText.Color = Color3.fromRGB(255, 255, 255)
+    DistanceText.Size = 12
+    DistanceText.Center = true
+    
+    local HealthBar = Drawing.new("Square")
+    HealthBar.Visible = false
+    HealthBar.Color = Color3.fromRGB(0, 255, 0)
+    HealthBar.Thickness = 1
+    HealthBar.Filled = true
+    
+    local Tracer = Drawing.new("Line")
+    Tracer.Visible = false
+    Tracer.Color = Color3.fromRGB(255, 255, 255)
+    Tracer.Thickness = 1
+    
+    ESPObjects[Player] = {
+        Box = Box,
+        Name = Name,
+        Distance = DistanceText,
+        HealthBar = HealthBar,
+        Tracer = Tracer,
+        Player = Player
+    }
+end
+
+-- Sistema ESP para itens
+function CreateItemESP(Item)
+    local Text = Drawing.new("Text")
+    Text.Visible = false
+    Text.Color = Color3.fromRGB(0, 255, 255)
+    Text.Size = 13
+    Text.Center = true
+    Text.Text = Item.Name
+    
+    ItemCache[Item] = Text
+end
+
+-- Sistema ESP para caixas
+function CreateBoxESP(Box)
+    local Text = Drawing.new("Text")
+    Text.Visible = false
+    Text.Color = Color3.fromRGB(255, 255, 0)
+    Text.Size = 13
+    Text.Center = true
+    Text.Text = "Caixa"
+    
+    ItemCache[Box] = Text
+end
+
+-- Atualizar ESP em tempo real
+function UpdateESP()
+    for Player, Drawings in pairs(ESPObjects) do
+        if Player and Player.Character and Player.Character:FindFirstChild("HumanoidRootPart") then
+            local RootPart = Player.Character.HumanoidRootPart
+            local Head = Player.Character:FindFirstChild("Head")
+            local Humanoid = Player.Character:FindFirstChildOfClass("Humanoid")
+            
+            if RootPart and Head then
+                local Position, OnScreen = Camera:WorldToViewportPoint(RootPart.Position)
+                
+                if OnScreen then
+                    local Distance = CalculateDistance(RootPart.Position)
+                    local BoxSize = Vector2.new(2000 / Position.Z, 3000 / Position.Z)
+                    
+                    -- Box ESP
+                    if Settings.ESP.Box then
+                        Drawings.Box.Size = BoxSize
+                        Drawings.Box.Position = Vector2.new(Position.X - BoxSize.X / 2, Position.Y - BoxSize.Y / 2)
+                        Drawings.Box.Visible = true
+                        
+                        -- Mudar cor baseado na equipe
+                        if Settings.Aimbot.TeamCheck and Player.Team == LocalPlayer.Team then
+                            Drawings.Box.Color = Color3.fromRGB(0, 255, 0)
+                        else
+                            Drawings.Box.Color = Color3.fromRGB(255, 0, 0)
+                        end
+                    end
+                    
+                    -- Nome e distância
+                    if Settings.ESP.Name then
+                        Drawings.Name.Text = Player.Name
+                        Drawings.Name.Position = Vector2.new(Position.X, Position.Y - BoxSize.Y / 2 - 15)
+                        Drawings.Name.Visible = true
+                    end
+                    
+                    if Settings.ESP.Distance then
+                        Drawings.Distance.Text = tostring(math.floor(Distance)) .. " studs"
+                        Drawings.Distance.Position = Vector2.new(Position.X, Position.Y + BoxSize.Y / 2 + 5)
+                        Drawings.Distance.Visible = true
+                    end
+                    
+                    -- Barra de vida
+                    if Settings.ESP.Health and Humanoid then
+                        local HealthPercent = Humanoid.Health / Humanoid.MaxHealth
+                        local HealthBarSize = Vector2.new(BoxSize.X * HealthPercent, 3)
+                        
+                        Drawings.HealthBar.Size = HealthBarSize
+                        Drawings.HealthBar.Position = Vector2.new(
+                            Position.X - BoxSize.X / 2,
+                            Position.Y - BoxSize.Y / 2 - 7
+                        )
+                        
+                        -- Gradiente de cor da vida
+                        if HealthPercent > 0.5 then
+                            Drawings.HealthBar.Color = Color3.fromRGB(0, 255, 0)
+                        elseif HealthPercent > 0.25 then
+                            Drawings.HealthBar.Color = Color3.fromRGB(255, 255, 0)
+                        else
+                            Drawings.HealthBar.Color = Color3.fromRGB(255, 0, 0)
+                        end
+                        Drawings.HealthBar.Visible = true
+                    end
+                    
+                    -- Tracers
+                    if Settings.ESP.Tracers then
+                        Drawings.Tracer.From = Vector2.new(Camera.ViewportSize.X / 2, Camera.ViewportSize.Y)
+                        Drawings.Tracer.To = Vector2.new(Position.X, Position.Y)
+                        Drawings.Tracer.Visible = true
+                    end
+                else
+                    -- Esconder se não estiver na tela
+                    for _, Drawing in pairs(Drawings) do
+                        if typeof(Drawing) == "table" and Drawing.Visible ~= nil then
+                            Drawing.Visible = false
+                        end
+                    end
+                end
+            end
+        else
+            -- Limpar ESP se jogador não existir mais
+            for _, Drawing in pairs(Drawings) do
+                if typeof(Drawing) == "table" and Drawing.Remove then
+                    Drawing:Remove()
+                end
+            end
+            ESPObjects[Player] = nil
+        end
+    end
+    
+    -- Atualizar ESP de itens e caixas
+    if Settings.ESP.Items then
+        for Item in pairs(game.Workspace:GetChildren()) do
+            if Item:IsA("Model") and (Item.Name:find("Ammo") or Item.Name:find("Gun") or Item.Name:find("Med")) then
+                if not ItemCache[Item] then
+                    CreateItemESP(Item)
+                end
+                
+                local Position, OnScreen = Camera:WorldToViewportPoint(Item:GetPivot().Position)
+                if OnScreen then
+                    local Text = ItemCache[Item]
+                    Text.Position = Vector2.new(Position.X, Position.Y)
+                    Text.Visible = true
+                elseif ItemCache[Item] then
+                    ItemCache[Item].Visible = false
+                end
+            end
+        end
+    end
+    
+    if Settings.ESP.Boxes then
+        for Box in pairs(game.Workspace:GetChildren()) do
+            if Box:IsA("Model") and (Box.Name:find("Box") or Box.Name:find("Crate") or Box.Name:find("Loot")) then
+                if not ItemCache[Box] then
+                    CreateBoxESP(Box)
+                end
+                
+                local Position, OnScreen = Camera:WorldToViewportPoint(Box:GetPivot().Position)
+                if OnScreen then
+                    local Text = ItemCache[Box]
+                    Text.Position = Vector2.new(Position.X, Position.Y)
+                    Text.Visible = true
+                elseif ItemCache[Box] then
+                    ItemCache[Box].Visible = false
+                end
+            end
+        end
+    end
+end
+
+-- Sistema Aimbot com previsão de movimento
+function GetBestTarget()
+    local BestTarget = nil
+    local ShortestDistance = Settings.Aimbot.FOV
+    
+    for _, Player in pairs(Players:GetPlayers()) do
+        if Player ~= LocalPlayer and Player.Character then
+            local Character = Player.Character
+            local HumanoidRootPart = Character:FindFirstChild("HumanoidRootPart")
+            local Humanoid = Character:FindFirstChildOfClass("Humanoid")
+            
+            if HumanoidRootPart and Humanoid and Humanoid.Health > 0 then
+                -- Verificação de equipe
+                if Settings.Aimbot.TeamCheck and Player.Team == LocalPlayer.Team then
+                    continue
+                end
+                
+                -- Verificação de visibilidade
+                if Settings.Aimbot.VisibleCheck and not IsVisible(HumanoidRootPart) then
+                    continue
+                end
+                
+                local ScreenPosition, OnScreen = Camera:WorldToViewportPoint(HumanoidRootPart.Position)
+                
+                if OnScreen then
+                    local MousePosition = Vector2.new(Mouse.X, Mouse.Y)
+                    local TargetPosition = Vector2.new(ScreenPosition.X, ScreenPosition.Y)
+                    local Distance = (MousePosition - TargetPosition).Magnitude
+                    
+                    if Distance < ShortestDistance then
+                        ShortestDistance = Distance
+                        BestTarget = {
+                            Player = Player,
+                            Part = HumanoidRootPart,
+                            Position = HumanoidRootPart.Position,
+                            Distance = Distance
+                        }
+                    end
+                end
+            end
+        end
+    end
+    
+    return BestTarget
+end
+
+-- Função de aimbot com suavização e previsão
+function Aimbot()
+    if not Settings.Aimbot.Enabled then return end
+    
+    local Target = GetBestTarget()
+    
+    if Target and UserInputService:IsKeyDown(Enum.KeyCode[Settings.Aimbot.Key:upper()]) then
+        -- Calcular posição com previsão de movimento
+        local PredictionOffset = Target.Part.Velocity * Settings.Aimbot.Prediction
+        local TargetPosition = Target.Position + PredictionOffset
+        
+        -- Converter para espaço da tela
+        local ScreenPosition, OnScreen = Camera:WorldToViewportPoint(TargetPosition)
+        
+        if OnScreen then
+            local TargetVector = Vector2.new(ScreenPosition.X, ScreenPosition.Y)
+            local CurrentVector = Vector2.new(Mouse.X, Mouse.Y)
+            
+            -- Aplicar suavização
+            local SmoothVector = CurrentVector:Lerp(TargetVector, Settings.Aimbot.Smoothness)
+            
+            -- Mover mouse (usando mousemoverevent para bypass de detecção)
+            mousemoverel(
+                (SmoothVector.X - CurrentVector.X) * 0.5,
+                (SmoothVector.Y - CurrentVector.Y) * 0.5
+            )
+        end
+    end
+end
+
+-- Sistema Speed Hack
+function ApplySpeed()
+    if Settings.Speed.Enabled and LocalPlayer.Character then
+        local Humanoid = LocalPlayer.Character:FindFirstChildOfClass("Humanoid")
+        if Humanoid then
+            Humanoid.WalkSpeed = Settings.Speed.Value
+            
+            -- Aplicar também ao NetworkOwner para sincronização com servidor
+            pcall(function()
+                local RootPart = LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
+                if RootPart then
+                    RootPart.Velocity = RootPart.CFrame.LookVector * Settings.Speed.Value * 2
+                end
+            end)
+        end
+    end
+end
+
+-- Interface de controle (hotkeys)
+UserInputService.InputBegan:Connect(function(Input)
+    if Input.UserInputType == Enum.UserInputType.Keyboard then
+        local Key = Input.KeyCode.Name:lower()
+        
+        -- Toggle Aimbot
+        if Key == "f1" then
+            Settings.Aimbot.Enabled = not Settings.Aimbot.Enabled
+            print("Aimbot:", Settings.Aimbot.Enabled and "ON" or "OFF")
+        
+        -- Toggle ESP
+        elseif Key == "f2" then
+            Settings.ESP.Enabled = not Settings.ESP.Enabled
+            print("ESP:", Settings.ESP.Enabled and "ON" or "OFF")
+        
+        -- Toggle Speed
+        elseif Key == "f3" then
+            Settings.Speed.Enabled = not Settings.Speed.Enabled
+            ApplySpeed()
+            print("Speed Hack:", Settings.Speed.Enabled and "ON" or "OFF")
+        
+        -- Aumentar velocidade
+        elseif Key == "equals" then -- Tecla "+"
+            Settings.Speed.Value = Settings.Speed.Value + 5
+            ApplySpeed()
+            print("Speed:", Settings.Speed.Value)
+        
+        -- Diminuir velocidade
+        elseif Key == "minus" then -- Tecla "-"
+            Settings.Speed.Value = math.max(16, Settings.Speed.Value - 5)
+            ApplySpeed()
+            print("Speed:", Settings.Speed.Value)
+        
+        -- Toggle FOV aumentado
+        elseif Key == "f4" then
+            if Camera.FieldOfView == 70 then
+                Camera.FieldOfView = Settings.Visuals.FOV
+            else
+                Camera.FieldOfView = 70
+            end
+        
+        -- Toggle brilho (afeta todos os jogadores)
+        elseif Key == "f5" then
+            if game.Lighting.Brightness == 2 then
+                game.Lighting.Brightness = 0.5
+            else
+                game.Lighting.Brightness = Settings.Visuals.Brightness
+            end
+        
+        -- Toggle todos os cheats (master switch)
+        elseif Key == "f12" then
+            Settings.Aimbot.Enabled = not Settings.Aimbot.Enabled
+            Settings.ESP.Enabled = not Settings.ESP.Enabled
+            
+            for _, Player in pairs(Players:GetPlayers()) do
+                if Player ~= LocalPlayer then
+                    CreateESP(Player)
+                end
+            end
+            
+            print("All cheats toggled")
+        end
+    end
+end)
+
+-- Inicializar ESP para jogadores existentes
+for _, Player in pairs(Players:GetPlayers()) do
+    if Player ~= LocalPlayer then
+        CreateESP(Player)
+    end
+end
+
+-- Conectar novos jogadores
+Players.PlayerAdded:Connect(function(Player)
+    CreateESP(Player)
+end)
+
+-- Loop principal de execução
+table.insert(Connections, RunService.RenderStepped:Connect(function()
+    -- Executar ESP se ativado
+    if Settings.ESP.Enabled then
+        UpdateESP()
+    else
+        -- Esconder todos os ESPs se desativado
+        for _, Drawings in pairs(ESPObjects) do
+            for _, Drawing in pairs(Drawings) do
+                if typeof(Drawing) == "table" and Drawing.Visible ~= nil then
+                    Drawing.Visible = false
+                end
+            end
+        end
+        
+        for _, Drawing in pairs(ItemCache) do
+            Drawing.Visible = false
+        end
+    end
+    
+    -- Executar Aimbot
+    Aimbot()
+    
+    -- Aplicar velocidade constantemente (para evitar reset pelo jogo)
+    ApplySpeed()
+end))
+
+-- Sistema anti-kick e anti-detecção (obfuscation básico)
+local function AntiCheatBypass()
+    -- Renomear variáveis críticas (confunde scanners básicos)
+    local FakeEnv = {
+        checkcaller = function() return true end,
+        hookfunction = function(f, newf) return f end,
+        newcclosure = function(f) return f end,
+        clonefunction = function(f) return f end
+    }
+    
+    -- Interceptar chamadas de detecção comum
+    local OldNamecall
+    OldNamecall = hookmetamethod(game, "__namecall", function(self, ...)
+        local Method = getnamecallmethod()
+        
+        -- Bypass para detecções comuns de cheats no Roblox
+        if Method == "Kick" or Method == "kick" then
+            return nil -- Ignorar kicks
+        elseif Method == "FindFirstChild" and tostring(self):lower():find("cheat") then
+            return nil -- Esconder objetos relacionados a cheat
+        elseif Method == "GetChildren" and tostring(self) == "CoreGui" then
+            local Children = OldNamecall(self, ...)
+            return Children -- Não modificar para evitar suspeitas
+        end
+        
+        return OldNamecall(self, ...)
+    end)
+    
+    -- Ocultar o script no ambiente de execução
+    pcall(function()
+        script.Parent = nil
+        script:Destroy()
+    end)
+end
+
+-- Executar bypass após inicialização completa
+task.wait(1)
+AntiCheatBypass()
+
+print("Project Delta Cheat v1.3 carregado com sucesso!")
+print("Hotkeys:")
+print("F1 - Toggle Aimbot")
+print("F2 - Toggle ESP")
+print("F3 - Toggle Speed Hack")
+print("+/- - Ajustar velocidade")
+print("F4 - Aumentar FOV")
+print("F5 - Aumentar brilho (afeta servidor)")
+print("F12 - Toggle todos os cheats")
+print("")
+print("Aimbot Key:", Settings.Aimbot.Key:upper())
+
+-- Limpeza ao desconectar (opcional para Xeno)
+game:GetService("Players").LocalPlayer.OnTeleport:Connect(function(State)
+    if State == Enum.TeleportState.Started then
+        for _, Connection in pairs(Connections) do
+            Connection:Disconnect()
+        end
+        
+        for _, Drawings in pairs(ESPObjects) do
+            for _, Drawing in pairs(Drawings) do
+                if typeof(Drawing) == "table" and Drawing.Remove then
+                    Drawing:Remove()
+                end
+            end
+        end
+        
+        for _, Drawing in pairs(ItemCache) do
+            Drawing:Remove()
+        end
+        
+        -- Reinjectar automaticamente se suportado pelo executor
+        if syn and syn.queue_on_teleport then
+            syn.queue_on_teleport(game:HttpGet("https://raw.githubusercontent.com/seu-repo/project-delta-cheat/main/main.lua"))
+        end
+    end
+end)
